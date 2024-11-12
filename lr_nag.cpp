@@ -338,10 +338,10 @@ int main(int argc, char *argv[]) {
   /////////////////////////////////////////////////////////////////
   // Logistic regression training loop on encrypted data
   auto mode = (params.withBT) ? "Bootstrap " : "Interactive ";
-  std::cout << std::endl;
+  std::cout << "Training mode: " << mode << std::endl;
   for (usint epochI = 0; epochI < params.numIters; epochI++) {
     TIC(t);
-    std::cout << mode << "Iteration: " << epochI
+    std::cout << "Iteration: " << epochI
               << " ******************************************************************"
               << std::endl;
     auto epochInferenceStart = std::chrono::high_resolution_clock::now();
@@ -540,7 +540,6 @@ int main(int argc, char *argv[]) {
     auto inferenceDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
         epochInferenceEnd - epochInferenceStart
     );
-    std::cout << "\t***Iteration: " << epochI << "\tInference time: " << inferenceDuration.count() << " seconds" << std::endl;
   }
   ofsloss.close();
   weightOFS.close();
