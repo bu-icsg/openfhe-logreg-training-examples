@@ -439,24 +439,41 @@ int main(int argc, char *argv[]) {
     // and https://jlmelville.github.io/mize/nesterov.html
     /////////////////////////////////////////////////////////////////
 
-    auto ctPhiPrime = cc->EvalSub(
-        ctTheta,
-        ctGradient
-    );
+    // auto ctPhiPrime = cc->EvalSub(
+    //     ctTheta,
+    //     ctGradient
+    // );
 
+    // if (epochI == 0) {
+    //   ctTheta = ctPhiPrime;
+    // } else {
+    //   ctTheta = cc->EvalAdd(
+    //       ctPhiPrime,
+    //       cc->EvalMult(
+    //           LR_ETA,
+    //           cc->EvalSub(ctPhiPrime, ctPhi)
+    //       )
+    //   );
+    // }
+    // ctPhi = ctPhiPrime;
+
+    /////////////////////////////////////////////////////////////////
+    // Adam 
+    /////////////////////////////////////////////////////////////////
+
+    float beta1 = 0.9;
+    float div_beta1 = beta1/(1-beta1);
+
+    auto ctPhiPrime = ctGradient;
     if (epochI == 0) {
-      ctTheta = ctPhiPrime;
+      ctTheta = cc->EvalSub(ctTheta, cc->EvalMult(LR_ETA, ctPhiPrime));
     } else {
-      ctTheta = cc->EvalAdd(
-          ctPhiPrime,
-          cc->EvalMult(
-              LR_ETA,
-              cc->EvalSub(ctPhiPrime, ctPhi)
-          )
-      );
+      ctPhiPrime = cc->EvalAdd(cc->EvalMult(ctPhi, div_beta1), ctPhiPrime);
+      ctTheta = cc->EvalSub(ctTheta, cc->EvalMult(LR_ETA, ctPhiPrime));
     }
-    // Step 11
     ctPhi = ctPhiPrime;
+
+    // Step 11
     if (DEBUG) {
       cc->Decrypt(keys.secretKey, ctTheta, &ptTheta);
 
@@ -508,6 +525,8 @@ int main(int argc, char *argv[]) {
         testOFS << epochI << ", " << testLoss << std::endl;
       }
     }
+    // training loop ends
+    /////////////////////////////////////////////////////////////////
 
     /////////////////////////////////////////////////////////////////
     // Packing the two ciphertexts back
