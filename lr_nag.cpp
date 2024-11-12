@@ -48,6 +48,9 @@
 /////////////////////////////////////////////////////////
 // Global Values
 /////////////////////////////////////////////////////////
+int CHEBYSHEV_ESTIMATION_DEGREE(2);
+int CHEBYSHEV_RANGE_ESTIMATION_START(-16);
+int CHEBYSHEV_RANGE_ESTIMATION_END(16);
 usint NUM_ITERS_DEF(200);
 usint WRITE_EVERY(10);
 bool WITH_BT_DEF(true);
@@ -66,9 +69,9 @@ float LR_ETA(0.1);   // Learning Rate
 //    following: to understand what degree might be necessary and how the
 //    multipication depth requirements will change
 // https://github.com/openfheorg/openfhe-development/blob/main/src/pke/examples/FUNCTION_EVALUATION.md#how-to-choose-multiplicative-depth
-int CHEBYSHEV_RANGE_ESTIMATION_START = -16;
-int CHEBYSHEV_RANGE_ESTIMATION_END = 16;
-int CHEBYSHEV_ESTIMATION_DEGREE = 59;
+// int CHEBYSHEV_RANGE_ESTIMATION_START = -16;
+// int CHEBYSHEV_RANGE_ESTIMATION_END = 16;
+// int CHEBYSHEV_ESTIMATION_DEGREE = 59;
 bool DEBUG = true;
 int DEBUG_PLAINTEXT_LENGTH = 32;
 
@@ -113,6 +116,8 @@ void debugWeights(
 
 int main(int argc, char *argv[]) {
 
+  std::cout << GetOPENFHEVersion() << std::endl;
+
   OPENFHE_DEBUG_FLAG(false);
   // Parse arguments
   OPENFHE_DEBUG(5);
@@ -124,7 +129,8 @@ int main(int argc, char *argv[]) {
   Parameters params{};
   params.populateParams(argc, argv, NUM_ITERS_DEF, WITH_BT_DEF, ROWS_TO_READ_DEF,
                         TRAIN_X_FILE_DEF, TRAIN_Y_FILE_DEF, TEST_X_FILE_DEF, TEST_Y_FILE_DEF,
-                        RING_DIM_DEF, WRITE_EVERY, BOOTSTRAP_PRECISION_DEF, false
+                        RING_DIM_DEF, CHEBYSHEV_ESTIMATION_DEGREE, CHEBYSHEV_RANGE_ESTIMATION_END, 
+                        CHEBYSHEV_RANGE_ESTIMATION_START, WRITE_EVERY, BOOTSTRAP_PRECISION_DEF, false
   );
 
   /////////////////////////////////////////////////////////
@@ -191,8 +197,8 @@ int main(int argc, char *argv[]) {
     // https://github.com/openfheorg/openfhe-development/blob/main/src/pke/examples/advanced-ckks-bootstrapping.cpp
     lbcrypto::SecretKeyDist skDist = lbcrypto::UNIFORM_TERNARY;
     // linear transform using 1 level is good for CKKS bootstrapping as the number of features is small (10)
-    levelBudget = {2, 2};
-    uint32_t levelsBeforeBootstrap = 14;
+    levelBudget = {1, 1};
+    uint32_t levelsBeforeBootstrap = 26;
     uint32_t approxBootstrapDepth = 8;
 
 #if NATIVEINT == 64
@@ -347,11 +353,13 @@ int main(int argc, char *argv[]) {
       // If we are in the 64-bit case, we may want to run bootstrapping twice
       //    As this will increase our precision, which will make our results
       //    more in-line with the 128-bit version
-      if (params.btPrecision > 0){
-        std::cout << "Running double-bootstrapping at: " << params.btPrecision << " precision" << std::endl;
-        ctWeights = cc->EvalBootstrap(ctWeights, 2, params.btPrecision);
-      } else {
-        ctWeights = cc->EvalBootstrap(ctWeights);
+      if (epochI % 2 == 1){
+        if (params.btPrecision > 0){
+          std::cout << "Running double-bootstrapping at: " << params.btPrecision << " precision" << std::endl;
+          ctWeights = cc->EvalBootstrap(ctWeights, 2, params.btPrecision);
+        } else {
+          ctWeights = cc->EvalBootstrap(ctWeights);
+        }
       }
 #endif
       OPENFHE_DEBUGEXP(ctWeights->GetLevel());
@@ -415,9 +423,9 @@ int main(int argc, char *argv[]) {
     EncLogRegCalculateGradient(cc, ctX, ctNegXt, ctyVCC, ctTheta, ctGradient,
                                rowSize, evalSumRowKeys, evalSumColKeys, keys,
                                false,
-                               CHEBYSHEV_RANGE_ESTIMATION_START,
-                               CHEBYSHEV_RANGE_ESTIMATION_END,
-                               CHEBYSHEV_ESTIMATION_DEGREE,
+                               params.CHEBYSHEV_RANGE_ESTIMATION_START,
+                               params.CHEBYSHEV_RANGE_ESTIMATION_END,
+                               params.CHEBYSHEV_ESTIMATION_DEGREE,
                                DEBUG_PLAINTEXT_LENGTH
     );
 #ifdef ENABLE_DEBUG
@@ -478,7 +486,7 @@ int main(int argc, char *argv[]) {
       OPENFHE_DEBUG(loss);
       ofsloss << epochTime << ", " << loss << std::endl;
 
-      if (epochI % WRITE_EVERY == 0 && epochI > 0) {
+      if ((epochI + 1) % WRITE_EVERY == 0 && epochI > 0) {
         std::cout << "\t Writing weights and test loss to files: " << "(" <<
                   params.weightsOutFile << ", " << params.testLossOutFile << ")" << std::endl;
         /////////////////////////////////////////////////////////////////
