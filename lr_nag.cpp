@@ -454,24 +454,67 @@ int main(int argc, char *argv[]) {
     //           cc->EvalSub(ctPhiPrime, ctPhi)
     //       )
     //   );
-    // }
+    // } 
     // ctPhi = ctPhiPrime;
 
     /////////////////////////////////////////////////////////////////
     // Adam 
     /////////////////////////////////////////////////////////////////
 
-    float beta1 = 0.9;
-    float div_beta1 = beta1/(1-beta1);
+    // float beta1 = 0.9;
+    // float div_beta1 = beta1/(1-beta1);
 
-    auto ctPhiPrime = ctGradient;
+    // auto ctPhiPrime = ctGradient;
+    // if (epochI == 0) {
+    //   ctTheta = cc->EvalSub(ctTheta, cc->EvalMult(LR_ETA, ctPhiPrime));
+    // } else {
+    //   ctPhiPrime = cc->EvalAdd(cc->EvalMult(ctPhi, div_beta1), ctPhiPrime);
+    //   ctTheta = cc->EvalSub(ctTheta, cc->EvalMult(LR_ETA, ctPhiPrime));
+    // }
+    // ctPhi = ctPhiPrime;
+
+    // Initialization step before the main loop
+    float BETA1 = 0.9;
+    float BETA2 = 0.99;
+    auto ctM = ctGradient;    // Set first moment estimate to initial gradient
+    auto ctV = cc->EvalMult(ctGradient, ctGradient); // Set second moment estimate to square of initial gradient
+
+    // In your loop
+    auto ctPhiPrime = cc->EvalSub(ctTheta, ctGradient); // Lookahead with current gradient
+
+    // Update first and second moment vectors
+    ctM = cc->EvalAdd(
+        cc->EvalMult(BETA1, ctM),
+        cc->EvalMult((1 - BETA1), ctGradient)
+    );
+
+    ctV = cc->EvalAdd(
+        cc->EvalMult(BETA2, ctV),
+        cc->EvalMult((1 - BETA2), cc->EvalMult(ctGradient, ctGradient))
+    );
+
+    // Compute bias-corrected moment estimates
+    float beta1_correction = 1/(1 - pow(BETA1, epochI + 1));
+    float beta2_correction = 1/(1 - pow(BETA2, epochI + 1));
+    auto mHat = cc->EvalMult(ctM, beta1_correction);
+    auto vHat = cc->EvalMult(ctV, beta2_correction);
+
+    // Nesterov acceleration update
     if (epochI == 0) {
-      ctTheta = cc->EvalSub(ctTheta, cc->EvalMult(LR_ETA, ctPhiPrime));
+        ctTheta = cc->EvalSub(ctTheta, cc->EvalMult(LR_ETA, mHat));
     } else {
-      ctPhiPrime = cc->EvalAdd(cc->EvalMult(ctPhi, div_beta1), ctPhiPrime);
-      ctTheta = cc->EvalSub(ctTheta, cc->EvalMult(LR_ETA, ctPhiPrime));
+        auto nesterovUpdate = cc->EvalAdd(
+            mHat,
+            cc->EvalMult(
+                LR_ETA,
+                cc->EvalSub(mHat, ctPhi)
+            )
+        );    
+        ctTheta = cc->EvalSub(ctTheta, nesterovUpdate);
     }
-    ctPhi = ctPhiPrime;
+
+    ctPhi = mHat; // Store current moment
+
 
     // Step 11
     if (DEBUG) {
