@@ -163,7 +163,7 @@ class Parameters {
     //   outFilePrefix = outFilePrefix_def + "interactive_";
     // }
 
-    outFilePrefix = outFilePrefix_def + std::to_string(CHEBYSHEV_ESTIMATION_DEGREE) + "_";
+    outFilePrefix = outFilePrefix + std::to_string(CHEBYSHEV_ESTIMATION_DEGREE) + "_";
     weightsOutFile = outFilePrefix + "weights.csv";
     trainOutFile = outFilePrefix + "train.csv";
     testLossOutFile = outFilePrefix + "test.csv";
