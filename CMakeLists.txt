@@ -7,12 +7,14 @@ find_package(OpenFHE REQUIRED)
 
 set( CMAKE_CXX_FLAGS ${OpenFHE_CXX_FLAGS} )
 
+set(OpenFHE_INCLUDE /projectnb/he/seyda/openfhe-development/install/usr/local/include/)
+
+include_directories( /projectnb/he/seyda/openfhe-development/install/usr/local/include/openfhe/pke)
+include_directories( /projectnb/he/seyda/openfhe-development/install/usr/local/include/openfhe/core)
+include_directories( /projectnb/he/seyda/openfhe-development/install/usr/local/include/openfhe/binfhe)
+include_directories( /projectnb/he/seyda/openfhe-development/install/usr/local/include/openfhe)
+
 include_directories(${OPENMP_INCLUDES})
-include_directories(${OpenFHE_INCLUDE})
-include_directories(${OpenFHE_INCLUDE}/third-party/include)
-include_directories(${OpenFHE_INCLUDE}/core)
-include_directories(${OpenFHE_INCLUDE}/pke)
-include_directories(${OpenFHE_INCLUDE}/binfhe)
 link_directories(${OpenFHE_LIBDIR})
 link_directories(${OPENMP_LIBRARIES})
 

@@ -57,13 +57,16 @@ class Parameters {
       const std::string &testXFile_def,
       const std::string &testYFile_def,
       uint32_t ringDimension_def,
+      int CHEBYSHEV_ESTIMATION_DEGREE_def,
+      int CHEBYSHEV_RANGE_ESTIMATION_END_def,
+      int CHEBYSHEV_RANGE_ESTIMATION_START_def,
       usint writeEvery_def,
       int btPrecision_def=0,
       bool verbose = false
   ) {
 
-    std::string outFilePrefix_def = "../results/nag_";
     int outputPrecision_def = dbl::max_digits10;
+    std::string outFilePrefix_def = "../results/";
 
     numIters = numIters_def;
     withBT = withBT_def;
@@ -75,11 +78,14 @@ class Parameters {
     std::string outFilePrefix = outFilePrefix_def;
     ringDimension = ringDimension_def;
     btPrecision = btPrecision_def;
+    CHEBYSHEV_RANGE_ESTIMATION_START = CHEBYSHEV_RANGE_ESTIMATION_START_def;
+    CHEBYSHEV_RANGE_ESTIMATION_END = CHEBYSHEV_RANGE_ESTIMATION_END_def;
+    CHEBYSHEV_ESTIMATION_DEGREE = CHEBYSHEV_ESTIMATION_DEGREE_def;
 
     outputPrecision = outputPrecision_def;
 
     int opt;
-    while ((opt = getopt(argc, argv, "bmn:r:x:y:j:k:d:w:p:e:h")) != -1) {
+    while ((opt = getopt(argc, argv, "bmn:r:x:y:j:k:d:w:p:e:h:c:z")) != -1) {
       switch (opt) {
         case 'b':withBT = true;
           std::cout << "bootstrapping enabled" << std::endl;
@@ -113,6 +119,14 @@ class Parameters {
           std::cout << "ringDimension: " << ringDimension << std::endl;
           break;
 
+        case 'c': CHEBYSHEV_ESTIMATION_DEGREE = atoi(optarg);
+          std::cout << "CHEBYSHEV_ESTIMATION_DEGREE: " << CHEBYSHEV_ESTIMATION_DEGREE << std::endl;
+          break;
+
+        // case 'z': CHEBYSHEV_RANGE_ESTIMATION_END = atoi(optarg);
+        //   std::cout << "CHEBYSHEV_RANGE_ESTIMATION_END: " << CHEBYSHEV_RANGE_ESTIMATION_END << std::endl;
+        //   break;
+
         case 'w':outFilePrefix = optarg;
           std::cout << "output File(s) prefix: " << outFilePrefix << std::endl;
           break;
@@ -133,6 +147,8 @@ class Parameters {
                     << "  -j <testing X file name> [" << testXFile_def << "]" << std::endl
                     << "  -k <testing y file name> [" << testYFile_def << "]" << std::endl
                     << "  -d <ring dimension> [" << ringDimension_def << "]" << std::endl
+                    << "  -c <chebyshev degree> [" << CHEBYSHEV_ESTIMATION_DEGREE << "]" << std::endl
+                    << "  -s <chebyshev range estimation> [" << CHEBYSHEV_RANGE_ESTIMATION_START_def << "]" << std::endl
                     << "  -w <output file name prefix> [" << outFilePrefix_def << "]" << std::endl
                     << "  -p <outputPrecision> [" << outputPrecision_def << "]" << std::endl
                     << "  -h prints this message" << std::endl;
@@ -141,12 +157,13 @@ class Parameters {
     }
 
     rowsToRead = (rowsToRead == 0) ? -1 : rowsToRead;
-    if (withBT) {
-      outFilePrefix = outFilePrefix_def + "bootstrap_";
-    } else {
-      outFilePrefix = outFilePrefix_def + "interactive_";
-    }
+    // if (withBT) {
+    //   outFilePrefix = outFilePrefix_def + "bootstrap_";
+    // } else {
+    //   outFilePrefix = outFilePrefix_def + "interactive_";
+    // }
 
+    outFilePrefix = outFilePrefix_def + std::to_string(CHEBYSHEV_ESTIMATION_DEGREE) + "_";
     weightsOutFile = outFilePrefix + "weights.csv";
     trainOutFile = outFilePrefix + "train.csv";
     testLossOutFile = outFilePrefix + "test.csv";
@@ -182,6 +199,9 @@ class Parameters {
   int rowsToRead;
   usint writeEvery;
   uint32_t ringDimension;
+  int CHEBYSHEV_ESTIMATION_DEGREE;
+  int CHEBYSHEV_RANGE_ESTIMATION_END;
+  int CHEBYSHEV_RANGE_ESTIMATION_START;
   int outputPrecision;
   std::string trainXFile;
   std::string trainYFile;
