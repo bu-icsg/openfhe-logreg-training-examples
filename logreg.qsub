@@ -1,7 +1,7 @@
 #!/bin/bash -l
 
 #$ -t 1-5
-#$ -l h_rt=16:00:00
+#$ -l h_rt=24:00:00
 # Define the array without spaces around the equals sign
 v=(2 5 13 27 59)
 
@@ -10,4 +10,4 @@ a=${v[$((SGE_TASK_ID - 1))]}
 
 # Navigate to the build directory and execute the program with the selected value of a
 cd build
-./lr_nag -c "$a" -w "../results_base/"
+./lr_nag -c "$a" -w "../results_sgd/"

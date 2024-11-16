@@ -435,27 +435,34 @@ int main(int argc, char *argv[]) {
 #endif
     OPENFHE_DEBUG("Applying gradient");
     /////////////////////////////////////////////////////////////////
+    //SGD 
+    /////////////////////////////////////////////////////////////////
+
+    // ctTheta = cc->EvalSub(ctTheta, cc->EvalMult(LR_ETA, ctGradient));
+    ctTheta = cc->EvalSub(ctTheta, ctGradient);
+
+    /////////////////////////////////////////////////////////////////
     //Note: Formulation of NAG update based on
     // and https://jlmelville.github.io/mize/nesterov.html
     /////////////////////////////////////////////////////////////////
 
-    auto ctPhiPrime = cc->EvalSub(
-        ctTheta,
-        ctGradient
-    );
+    // auto ctPhiPrime = cc->EvalSub(
+    //     ctTheta,
+    //     cc->EvalMult(LR_ETA, ctGradient)
+    // );
 
-    if (epochI == 0) {
-      ctTheta = ctPhiPrime;
-    } else {
-      ctTheta = cc->EvalAdd(
-          ctPhiPrime,
-          cc->EvalMult(
-              LR_ETA,
-              cc->EvalSub(ctPhiPrime, ctPhi)
-          )
-      );
-    } 
-    ctPhi = ctPhiPrime;
+    // if (epochI == 0) {
+    //   ctTheta = ctPhiPrime;
+    // } else {
+    //   ctTheta = cc->EvalAdd(
+    //       ctPhiPrime,
+    //       cc->EvalMult(
+    //           LR_ETA,
+    //           cc->EvalSub(ctPhiPrime, ctPhi)
+    //       )
+    //   );
+    // } 
+    // ctPhi = ctPhiPrime;
 
     /////////////////////////////////////////////////////////////////
     // Adam 
