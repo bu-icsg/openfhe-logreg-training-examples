@@ -45,7 +45,7 @@
 #include "utils.h"
 #include "parameters.h"
 #include "minimax.hpp"
-
+#include "PlateauLRScheduler.hpp"
 /////////////////////////////////////////////////////////
 // Global Values
 /////////////////////////////////////////////////////////
@@ -336,10 +336,43 @@ int main(int argc, char *argv[]) {
         cc->EvalBootstrapKeyGen(keys.secretKey, numSlotsBoot);
     }
 
+    CT ctM, ctMPrime;
+    CT ctV, ctVPrime;
+    CT ctGrad;
+
+    int bs_moments_degree;
+    switch (params.CHEBYSHEV_ESTIMATION_DEGREE) {
+        case 2:
+            bs_moments_degree = 8;
+            break;
+        case 5:
+            bs_moments_degree = 7;
+            break;
+        case 13:
+            bs_moments_degree = 6;
+            break;
+        case 27:
+            bs_moments_degree = 5;
+            break;
+        case 59:
+            bs_moments_degree = 4;
+            break;
+        default:
+            bs_moments_degree = 1; 
+            break;
+    }
+
+    vector<double> train_losses(params.numIters);
+    // Initialize a plateau scheduler that reduces LR if loss doesn't improve
+    int patience = 3; // epochs
+    double factor = 0.5;
+    PlateauLRScheduler scheduler(LR_ETA, factor, patience, "min");
+
     /////////////////////////////////////////////////////////////////
     // Logistic regression training loop on encrypted data
     auto mode = (params.withBT) ? "Bootstrap " : "Interactive ";
     std::cout << "Training mode: " << mode << std::endl;
+    std::cout << "Bs moments every " << bs_moments_degree << " epochs" << std::endl;
     for (usint epochI = 0; epochI < params.numIters; epochI++) {
         TIC(t);
         std::cout << "Iteration: " << epochI
@@ -355,15 +388,24 @@ int main(int argc, char *argv[]) {
             //    As this will increase our precision, which will make our results
             //    more in-line with the 128-bit version
 
-            if ((epochI + 1) % 2 == 0)
-                if (params.btPrecision > 0){
-                    std::cout << "Running double-bootstrapping at: " << params.btPrecision << " precision" << std::endl;
-                    ctWeights = cc->EvalBootstrap(ctWeights, 2, params.btPrecision);
-                } else {
-                    ctWeights = cc->EvalBootstrap(ctWeights);
-                }
+             if ((epochI+1) % bs_moments_degree == 0){
+                 std::cout << "Bootstrapping the moments: " << std::endl;
+                 ctM->SetSlots(numSlotsBoot);
+                 ctV->SetSlots(numSlotsBoot);
+                 ctM = cc->EvalBootstrap(ctM);
+                 ctV = cc->EvalBootstrap(ctV);
+             }
 
+//            std::cout << std::endl << "\tNum levels, 1: " << ctWeights->GetLevel() << std::endl;
+            if (params.btPrecision > 0){
+                std::cout << "Running double-bootstrapping at: " << params.btPrecision << " precision" << std::endl;
+                ctWeights = cc->EvalBootstrap(ctWeights, 2, params.btPrecision);
+            } else {
+                ctWeights = cc->EvalBootstrap(ctWeights);
+            }
+//            std::cout << std::endl << "\tNum levels, 2: " << ctWeights->GetLevel() << std::endl;
 
+            std::cout << "\tNum limbs, m: " << ctM->GetElements()[0].GetNumOfElements() << ", v: " << ctV->GetElements()[0].GetNumOfElements() << std::endl;
 #endif
             OPENFHE_DEBUGEXP(ctWeights->GetLevel());
         } else {
@@ -442,23 +484,87 @@ int main(int argc, char *argv[]) {
         // and https://jlmelville.github.io/mize/nesterov.html
         /////////////////////////////////////////////////////////////////
 
-        auto ctPhiPrime = cc->EvalSub(
-            ctTheta,
-            ctGradient
+//         auto ctPhiPrime = cc->EvalSub(
+//             ctTheta,
+//             ctGradient
+//         );
+//
+//         if (epochI == 0) {
+//           ctTheta = ctPhiPrime;
+//         } else {
+//           ctTheta = cc->EvalAdd(
+//               ctPhiPrime,
+//               cc->EvalMult(
+//                   LR_ETA,
+//                   cc->EvalSub(ctPhiPrime, ctPhi)
+//               )
+//           );
+//         }
+//         ctPhi = ctPhiPrime;
+
+        /////////////////////////////////////////////////////////////////
+        // Adam
+        /////////////////////////////////////////////////////////////////
+        float BETA1 = 0.85;
+        float BETA2 = 0.995;
+
+        double current_lr = scheduler.get_lr();
+
+        float beta_correction = sqrt((1 - pow(BETA2, epochI + 1)))/(1 - pow(BETA1, epochI + 1) + (0.000000001));
+
+        ctGrad = ctGradient->Clone();
+        PT grad, weights;
+        cc->Decrypt(keys.secretKey, ctGradient, &grad);
+        grad->SetLength(8);
+        cc->Decrypt(keys.secretKey, ctWeights, &weights);
+        weights->SetLength(8);
+
+        std::cout << "beta_correction: " << beta_correction << std::endl;
+        std::cout << "learning rate: " << current_lr << std::endl;
+        std::cout << "Gradient: " << grad;
+
+        if (epochI == 0){
+            ctMPrime = cc->EvalMult((1-BETA1), ctGrad);
+            ctVPrime = cc->EvalMult((1-BETA2), cc->EvalMult(ctGrad, ctGrad));
+        }
+        else {
+            ctMPrime = cc->EvalAdd(cc->EvalMult(BETA1, ctM),
+                                   cc->EvalMult((1-BETA1), ctGrad));
+            ctVPrime = cc->EvalAdd(cc->EvalMult(BETA2, ctV),
+                                   cc->EvalMult((1-BETA2), cc->EvalMult(ctGrad, ctGrad)));
+        }
+
+       auto div_vHat = cc->EvalChebyshevFunction([](double x) -> double { return 1/(sqrt(x)+0.00000000000000001); }, ctVPrime, 0, 1, 59);
+        // auto div_vHat = MinimaxEvaluation(f, ctVPrime, 0, 1, 2);
+        // NADAM step:
+        ctMPrime = cc->EvalAdd(cc->EvalMult(BETA1, ctMPrime), cc->EvalMult((1-BETA1), ctGrad));
+        auto adam_update = cc->EvalMult(cc->EvalMult(beta_correction*current_lr, ctMPrime), div_vHat);
+        ctTheta = cc->EvalSub(
+                ctTheta,
+                adam_update
         );
 
-        if (epochI == 0) {
-          ctTheta = ctPhiPrime;
-        } else {
-          ctTheta = cc->EvalAdd(
-              ctPhiPrime,
-              cc->EvalMult(
-                  LR_ETA,
-                  cc->EvalSub(ctPhiPrime, ctPhi)
-              )
-          );
-        }
-        ctPhi = ctPhiPrime;
+        PT ptM, ptV;
+        cc->Decrypt(keys.secretKey, ctMPrime, &ptM);
+        ptM->SetLength(8);
+        std::cout << "m: " << ptM;
+
+        cc->Decrypt(keys.secretKey, ctVPrime, &ptV);
+        ptV->SetLength(8);
+        std::cout << "v: " << ptV;
+
+        PT ptdiv_vHat;
+        cc->Decrypt(keys.secretKey, div_vHat, &ptdiv_vHat);
+        ptdiv_vHat->SetLength(8);
+        std::cout << "1/sqrt(v): " << ptdiv_vHat;
+
+        PT ptupdate;
+        cc->Decrypt(keys.secretKey, adam_update, &ptupdate);
+        ptupdate->SetLength(8);
+        std::cout << "update: " << ptupdate;
+
+        ctM = ctMPrime;
+        ctV = ctVPrime; // Store current moment
 
         // Step 11
         if (DEBUG) {
@@ -478,6 +584,10 @@ int main(int argc, char *argv[]) {
             std::cout << std::endl;
 
             auto loss = ComputeLoss(final_b, X, y);
+
+            train_losses[epochI] = loss;
+            scheduler.step(train_losses[epochI]);
+
             /////////////////////////////////////////////////////////////////
             //Saving and logging information
             /////////////////////////////////////////////////////////////////
