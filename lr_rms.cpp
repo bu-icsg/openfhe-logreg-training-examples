@@ -45,11 +45,12 @@
 #include "utils.h"
 #include "parameters.h"
 #include "minimax.hpp"
-#include "PlateauLRScheduler.hpp"
+// #include "PlateauLRScheduler.hpp"
 /////////////////////////////////////////////////////////
 // Global Values
 /////////////////////////////////////////////////////////
-int CHEBYSHEV_ESTIMATION_DEGREE(2);
+int CHEBYSHEV_ESTIMATION_DEGREE(59);
+int MOMENT_ESTIMATION_DEGREE(59);
 int CHEBYSHEV_RANGE_ESTIMATION_START(-16);
 int CHEBYSHEV_RANGE_ESTIMATION_END(16);
 usint NUM_ITERS_DEF(200);
@@ -61,8 +62,9 @@ std::string TRAIN_Y_FILE_DEF = "../train_data/y_1024.csv";
 std::string TEST_X_FILE_DEF = "../train_data/X_norm.csv";
 std::string TEST_Y_FILE_DEF = "../train_data/y.csv";
 uint32_t RING_DIM_DEF(1 << 17);
-float LR_GAMMA(0.1);  // Learning Rate
-float LR_ETA(0.1);   // Learning Rate
+float LR_GAMMA(0.1);   // lr
+float LR_ETA(0.1);   // lr
+float LR_factor(1);   // Learning Rate scheduling factor
 
 // Note: the ranges were chosen based on empirical observations.
 //    Depending on your application, the estimation ranges may change.
@@ -130,8 +132,9 @@ int main(int argc, char *argv[]) {
     Parameters params{};
     params.populateParams(argc, argv, NUM_ITERS_DEF, WITH_BT_DEF, ROWS_TO_READ_DEF,
                           TRAIN_X_FILE_DEF, TRAIN_Y_FILE_DEF, TEST_X_FILE_DEF, TEST_Y_FILE_DEF,
-                          RING_DIM_DEF, CHEBYSHEV_ESTIMATION_DEGREE, CHEBYSHEV_RANGE_ESTIMATION_END,
-                          CHEBYSHEV_RANGE_ESTIMATION_START, WRITE_EVERY, BOOTSTRAP_PRECISION_DEF, false
+                          RING_DIM_DEF, CHEBYSHEV_ESTIMATION_DEGREE, MOMENT_ESTIMATION_DEGREE,
+                          CHEBYSHEV_RANGE_ESTIMATION_END, CHEBYSHEV_RANGE_ESTIMATION_START, 
+                          WRITE_EVERY, BOOTSTRAP_PRECISION_DEF, false, LR_ETA, LR_factor
     );
 
     /////////////////////////////////////////////////////////
@@ -336,44 +339,64 @@ int main(int argc, char *argv[]) {
         cc->EvalBootstrapKeyGen(keys.secretKey, numSlotsBoot);
     }
 
-    CT ctM, ctMPrime;
-    CT ctV, ctVPrime;
-    CT ctGrad;
+    // CT ctM, ctMPrime;
+    // CT ctV, ctVPrime;
+    // CT ctGrad;
 
-        int bs_moments_degree;
-    switch (params.CHEBYSHEV_ESTIMATION_DEGREE) {
+    CT ctV;
+
+    int bs_moments_degree;
+    switch (params.MOMENT_ESTIMATION_DEGREE) {
         case 2:
-            bs_moments_degree = 9;
+            bs_moments_degree = 10;
             break;
         case 5:
-            bs_moments_degree = 8;
+            bs_moments_degree = 9;
             break;
         case 13:
-            bs_moments_degree = 7;
+            bs_moments_degree = 8;
             break;
         case 27:
-            bs_moments_degree = 6;
+            bs_moments_degree = 7;
             break;
         case 59:
-            bs_moments_degree = 5;
+            bs_moments_degree = 6;
             break;
+        case 119:
+            bs_moments_degree = 5;
+            break;            
         default:
             bs_moments_degree = 1; 
             break;
     }
 
-    vector<double> train_losses(params.numIters);
-    // Initialize a plateau scheduler that reduces LR if loss doesn't improve
-    int patience = 3; // epochs
-    double factor = 0.5;
-    PlateauLRScheduler scheduler(LR_ETA, factor, patience, "min");
+    CT _ctTheta = cc->EvalMult(ctWeights, ptExtractThetaMask);
+    CT ctTheta = cc->EvalAdd(
+            cc->EvalRotate(_ctTheta, signedRowSize),  // | 0, theta, 0, theta ...|
+            _ctTheta);
 
+    cc->Decrypt(keys.secretKey, ctTheta, &ptTheta);
+
+    final_b_vec = ptTheta->GetRealPackedValue();
+
+    final_b_vec.resize(originalNumFeat);
+
+    final_b = Mat(originalNumFeat, Vec(1, 0.0));
+    //copy values into final_b matrix
+    std::cout << "\tInitial weights: ";
+    for (auto copyI = 0U; copyI < originalNumFeat; copyI++) {
+        std::cout << final_b_vec[copyI] << ",";
+        final_b[copyI][0] = final_b_vec[copyI];
+    }
+    std::cout << std::endl;
+    auto loss = ComputeLoss(final_b, X, y);
+    std::cout << "\tInitial Loss: " << loss << std::endl;
+    ofsloss << loss << std::endl;
 
     /////////////////////////////////////////////////////////////////
     // Logistic regression training loop on encrypted data
     auto mode = (params.withBT) ? "Bootstrap " : "Interactive ";
     std::cout << "Training mode: " << mode << std::endl;
-    std::cout << "Bs momensts every " << bs_moments_degree << " epochs" << std::endl;
     for (usint epochI = 0; epochI < params.numIters; epochI++) {
         TIC(t);
         std::cout << "Iteration: " << epochI
@@ -389,13 +412,6 @@ int main(int argc, char *argv[]) {
             //    As this will increase our precision, which will make our results
             //    more in-line with the 128-bit version
 
-             if ((epochI+1) % bs_moments_degree == 0){
-                 std::cout << "Bootstrapping the moments: " << std::endl;
-                //  ctM->SetSlots(numSlotsBoot);
-                 ctV->SetSlots(numSlotsBoot);
-                //  ctM = cc->EvalBootstrap(ctM);
-                 ctV = cc->EvalBootstrap(ctV);
-             }
 
 //            std::cout << std::endl << "\tNum levels, 1: " << ctWeights->GetLevel() << std::endl;
             if (params.btPrecision > 0){
@@ -404,9 +420,11 @@ int main(int argc, char *argv[]) {
             } else {
                 ctWeights = cc->EvalBootstrap(ctWeights);
             }
-//            std::cout << std::endl << "\tNum levels, 2: " << ctWeights->GetLevel() << std::endl;
-
-            std::cout << "\tNum limbs, v: " << ctV->GetElements()[0].GetNumOfElements() << std::endl;
+            if ((epochI+1) % bs_moments_degree == 0){
+                 std::cout << "Bootstrapping the moments: " << std::endl;
+                 ctV->SetSlots(numSlotsBoot);
+                 ctV = cc->EvalBootstrap(ctV);
+             }
 
 #endif
             OPENFHE_DEBUGEXP(ctWeights->GetLevel());
@@ -482,41 +500,33 @@ int main(int argc, char *argv[]) {
 #endif
         OPENFHE_DEBUG("Applying gradient");
         /////////////////////////////////////////////////////////////////
-        //Note: Formulation of NAG update based on
-        // and https://jlmelville.github.io/mize/nesterov.html
-        /////////////////////////////////////////////////////////////////
-
-//         auto ctPhiPrime = cc->EvalSub(
-//             ctTheta,
-//             ctGradient
-//         );
-//
-//         if (epochI == 0) {
-//           ctTheta = ctPhiPrime;
-//         } else {
-//           ctTheta = cc->EvalAdd(
-//               ctPhiPrime,
-//               cc->EvalMult(
-//                   LR_ETA,
-//                   cc->EvalSub(ctPhiPrime, ctPhi)
-//               )
-//           );
-//         }
-//         ctPhi = ctPhiPrime;
-
-        /////////////////////////////////////////////////////////////////
         // RMSProp
         /////////////////////////////////////////////////////////////////
 
         float BETA = 0.9;
-        int degree = 59;
+        double a = -3;
+        double b = 3;
+        double scale = 1;
 
-        double a = 0;
-        double b = 1;
+        // float beta_correction = sqrt(1 - pow(BETA, epochI+1));
+        float beta_correction = 1; // v1_2
 
-        double current_lr = scheduler.get_lr();
+        double scaled_a = 0;
+        if (a > 0) {
+            scaled_a = a * a * (1 - pow(BETA, epochI+1)) * scale * scale;
+        }
+        double scaled_b = b * (1 - pow(BETA, epochI+1)) * scale * scale;
 
-        ctGrad = ctGradient->Clone();
+        if (epochI>0) {
+            params.lr_eta = params.lr_eta * params.lr_factor;
+        }
+
+
+        CT ctVPrime;
+
+        CT ctGrad = ctGradient->Clone();
+        ctGrad = cc->EvalMult(ctGrad, scale);
+        
         PT grad, weights;
         cc->Decrypt(keys.secretKey, ctGradient, &grad);
         grad->SetLength(8);
@@ -524,7 +534,7 @@ int main(int argc, char *argv[]) {
         weights->SetLength(8);
 
         std::cout << "Gradient: " << grad;
-        std::cout << "learning rate: " << current_lr << std::endl;
+        std::cout << "learning rate: " << params.lr_eta << std::endl;
 
         if (epochI == 0){
             ctVPrime = cc->EvalMult((1-BETA), cc->EvalMult(ctGrad, ctGrad));
@@ -534,9 +544,9 @@ int main(int argc, char *argv[]) {
                                    cc->EvalMult((1-BETA), cc->EvalMult(ctGrad, ctGrad)));
         }
 
-        auto div_vHat = cc->EvalChebyshevFunction([](double x) -> double { return 1/(sqrt(x)+0.00000000000000001); }, ctVPrime, a, b, degree);
+        auto div_vHat = cc->EvalChebyshevFunction([](double x) -> double { return 1/(sqrt(x)+0.00000000000000001); }, ctVPrime, scaled_a, scaled_b, params.MOMENT_ESTIMATION_DEGREE);
 //        auto div_vHat = MinimaxEvaluation(f, ctVPrime, 0, 1, 2);
-        auto adam_update = cc->EvalMult(cc->EvalMult(current_lr, ctGrad), div_vHat);
+        auto adam_update = cc->EvalMult(cc->EvalMult(params.lr_eta*beta_correction, ctGrad), div_vHat);
         ctTheta = cc->EvalSub(
                 ctTheta,
                 adam_update
@@ -575,10 +585,7 @@ int main(int argc, char *argv[]) {
             }
             std::cout << std::endl;
 
-            auto loss = ComputeLoss(final_b, X, y);
-
-            train_losses[epochI] = loss;
-            scheduler.step(train_losses[epochI]);
+            loss = ComputeLoss(final_b, X, y);
 
             /////////////////////////////////////////////////////////////////
             //Saving and logging information
@@ -590,7 +597,7 @@ int main(int argc, char *argv[]) {
             std::cout << "\tLoss: " << loss << "\t took: "
                       << epochTime / 1000.0 << " s" << std::endl;
             OPENFHE_DEBUG(loss);
-            ofsloss << epochTime << ", " << loss << std::endl;
+            ofsloss << loss << std::endl;
 
             if ((epochI + 1) % WRITE_EVERY == 0 && epochI > 0) {
                 std::cout << "\t Writing weights and test loss to files: " << "(" <<

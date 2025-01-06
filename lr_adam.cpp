@@ -45,11 +45,12 @@
 #include "utils.h"
 #include "parameters.h"
 #include "minimax.hpp"
-#include "PlateauLRScheduler.hpp"
+// #include "PlateauLRScheduler.hpp"
 /////////////////////////////////////////////////////////
 // Global Values
 /////////////////////////////////////////////////////////
-int CHEBYSHEV_ESTIMATION_DEGREE(2);
+int CHEBYSHEV_ESTIMATION_DEGREE(27);
+int MOMENT_ESTIMATION_DEGREE(59);
 int CHEBYSHEV_RANGE_ESTIMATION_START(-16);
 int CHEBYSHEV_RANGE_ESTIMATION_END(16);
 usint NUM_ITERS_DEF(200);
@@ -63,6 +64,7 @@ std::string TEST_Y_FILE_DEF = "../train_data/y.csv";
 uint32_t RING_DIM_DEF(1 << 17);
 float LR_GAMMA(0.1);  // Learning Rate
 float LR_ETA(0.1);   // Learning Rate
+float LR_factor(1);   // Learning Rate scheduling factor
 
 // Note: the ranges were chosen based on empirical observations.
 //    Depending on your application, the estimation ranges may change.
@@ -130,8 +132,9 @@ int main(int argc, char *argv[]) {
     Parameters params{};
     params.populateParams(argc, argv, NUM_ITERS_DEF, WITH_BT_DEF, ROWS_TO_READ_DEF,
                           TRAIN_X_FILE_DEF, TRAIN_Y_FILE_DEF, TEST_X_FILE_DEF, TEST_Y_FILE_DEF,
-                          RING_DIM_DEF, CHEBYSHEV_ESTIMATION_DEGREE, CHEBYSHEV_RANGE_ESTIMATION_END,
-                          CHEBYSHEV_RANGE_ESTIMATION_START, WRITE_EVERY, BOOTSTRAP_PRECISION_DEF, false
+                          RING_DIM_DEF, CHEBYSHEV_ESTIMATION_DEGREE, MOMENT_ESTIMATION_DEGREE,
+                          CHEBYSHEV_RANGE_ESTIMATION_END, CHEBYSHEV_RANGE_ESTIMATION_START, 
+                          WRITE_EVERY, BOOTSTRAP_PRECISION_DEF, false, LR_ETA, LR_factor
     );
 
     /////////////////////////////////////////////////////////
@@ -341,32 +344,59 @@ int main(int argc, char *argv[]) {
     CT ctGrad;
 
     int bs_moments_degree;
-    switch (params.CHEBYSHEV_ESTIMATION_DEGREE) {
+    switch (params.MOMENT_ESTIMATION_DEGREE) {
         case 2:
-            bs_moments_degree = 9;
+            bs_moments_degree = 10;
             break;
         case 5:
-            bs_moments_degree = 8;
+            bs_moments_degree = 9;
             break;
         case 13:
-            bs_moments_degree = 7;
+            bs_moments_degree = 8;
             break;
         case 27:
-            bs_moments_degree = 6;
+            bs_moments_degree = 7;
             break;
         case 59:
-            bs_moments_degree = 5;
+            bs_moments_degree = 6;
             break;
+        case 119:
+            bs_moments_degree = 5;
+            break;            
         default:
             bs_moments_degree = 1; 
             break;
     }
 
-    vector<double> train_losses(params.numIters);
-    // Initialize a plateau scheduler that reduces LR if loss doesn't improve
-    int patience = 3; // epochs
-    double factor = 0.5;
-    PlateauLRScheduler scheduler(LR_ETA, factor, patience, "min");
+    CT _ctTheta = cc->EvalMult(ctWeights, ptExtractThetaMask);
+    CT ctTheta = cc->EvalAdd(
+            cc->EvalRotate(_ctTheta, signedRowSize),  // | 0, theta, 0, theta ...|
+            _ctTheta);
+
+    cc->Decrypt(keys.secretKey, ctTheta, &ptTheta);
+
+    final_b_vec = ptTheta->GetRealPackedValue();
+
+    final_b_vec.resize(originalNumFeat);
+
+    final_b = Mat(originalNumFeat, Vec(1, 0.0));
+    //copy values into final_b matrix
+    std::cout << "\tInitial weights: ";
+    for (auto copyI = 0U; copyI < originalNumFeat; copyI++) {
+        std::cout << final_b_vec[copyI] << ",";
+        final_b[copyI][0] = final_b_vec[copyI];
+    }
+    std::cout << std::endl;
+    auto loss = ComputeLoss(final_b, X, y);
+    std::cout << "\tInitial Loss: " << loss << std::endl;
+    ofsloss << loss << std::endl;
+
+
+    // vector<double> train_losses(params.numIters);
+    // // Initialize a plateau scheduler that reduces LR if loss doesn't improve
+    // int patience = 3; // epochs
+    // double factor = 0.5;
+    // PlateauLRScheduler scheduler(LR_ETA, factor, patience, "min");
 
 
     /////////////////////////////////////////////////////////////////
@@ -406,7 +436,8 @@ int main(int argc, char *argv[]) {
             }
 //            std::cout << std::endl << "\tNum levels, 2: " << ctWeights->GetLevel() << std::endl;
 
-            std::cout << "\tNum limbs, m: " << ctM->GetElements()[0].GetNumOfElements() << ", v: " << ctV->GetElements()[0].GetNumOfElements() << std::endl;
+            std::cout << "\tNum limbs, m: " << ctM->GetElements()[0].GetNumOfElements() << std::endl;
+            std::cout << "\tNum limbs, v: " << ctV->GetElements()[0].GetNumOfElements() << std::endl;
 
 #endif
             OPENFHE_DEBUGEXP(ctWeights->GetLevel());
@@ -482,48 +513,45 @@ int main(int argc, char *argv[]) {
 #endif
         OPENFHE_DEBUG("Applying gradient");
         /////////////////////////////////////////////////////////////////
-        //Note: Formulation of NAG update based on
-        // and https://jlmelville.github.io/mize/nesterov.html
-        /////////////////////////////////////////////////////////////////
-
-//         auto ctPhiPrime = cc->EvalSub(
-//             ctTheta,
-//             ctGradient
-//         );
-//
-//         if (epochI == 0) {
-//           ctTheta = ctPhiPrime;
-//         } else {
-//           ctTheta = cc->EvalAdd(
-//               ctPhiPrime,
-//               cc->EvalMult(
-//                   LR_ETA,
-//                   cc->EvalSub(ctPhiPrime, ctPhi)
-//               )
-//           );
-//         }
-//         ctPhi = ctPhiPrime;
-
-        /////////////////////////////////////////////////////////////////
         // Adam
         /////////////////////////////////////////////////////////////////
-        float BETA1 = 0.9;
-        float BETA2 = 0.999;
+        float BETA1 = 0.85;
+        float BETA2 = 0.995;
+
+        double scale = 1;
+        double a = -3;
+        double b = 3;
+
+        double scaled_a = 0;
+        if (a > 0) {
+            scaled_a = a * a * (1 - pow(BETA2, epochI+1)) * scale * scale;
+        }
+        double scaled_b = b * b * (1 - pow(BETA2, epochI+1)) * scale * scale;
 
         float beta_correction = sqrt((1 - pow(BETA2, epochI + 1)))/(1 - pow(BETA1, epochI + 1) + (0.000000001));
 
         ctGrad = ctGradient->Clone();
+        ctGrad = cc->EvalMult(ctGrad, scale);
+
+
         PT grad, weights;
         cc->Decrypt(keys.secretKey, ctGradient, &grad);
         grad->SetLength(8);
         cc->Decrypt(keys.secretKey, ctWeights, &weights);
         weights->SetLength(8);
 
-        double current_lr = scheduler.get_lr();
+        float eta;
+        if (epochI>0 & epochI<7) {
+            eta = params.lr_eta / (epochI*(1-BETA1));
+        }
+        else {
+            eta = params.lr_eta;
+        }
 
         std::cout << "beta_correction: " << beta_correction << std::endl;
-        std::cout << "learning rate: " << current_lr << std::endl;
+        std::cout << "learning rate: " << eta << std::endl;
         std::cout << "Gradient: " << grad;
+        std::cout << "scale: " << scale << std::endl;
 
         if (epochI == 0){
             ctMPrime = cc->EvalMult((1-BETA1), ctGrad);
@@ -532,13 +560,16 @@ int main(int argc, char *argv[]) {
         else {
             ctMPrime = cc->EvalAdd(cc->EvalMult(BETA1, ctM),
                                    cc->EvalMult((1-BETA1), ctGrad));
-            ctVPrime = cc->EvalAdd(cc->EvalMult(BETA2, ctV),
-                                   cc->EvalMult((1-BETA2), cc->EvalMult(ctGrad, ctGrad)));
+            auto v1 = cc->EvalMult(BETA2, ctV);
+            auto v2 = cc->EvalMult((1-BETA2), cc->EvalMult(ctGrad, ctGrad));
+
+            ctVPrime = cc->EvalAdd(v1, v2);
+
         }
 
-       auto div_vHat = cc->EvalChebyshevFunction([](double x) -> double { return 1/(sqrt(x)+0.00000000000000001); }, ctVPrime, 0, 1, 59);
+       auto div_vHat = cc->EvalChebyshevFunction([](double x) -> double { return 1/(sqrt(x)+0.00000000000000001); }, ctVPrime, scaled_a, scaled_b, params.MOMENT_ESTIMATION_DEGREE);
         // auto div_vHat = MinimaxEvaluation(f, ctVPrime, 0, 1, 2);
-        auto adam_update = cc->EvalMult(cc->EvalMult(beta_correction*current_lr, ctMPrime), div_vHat);
+        auto adam_update = cc->EvalMult(cc->EvalMult(beta_correction*eta, ctMPrime), div_vHat);
         ctTheta = cc->EvalSub(
                 ctTheta,
                 adam_update
@@ -583,10 +614,7 @@ int main(int argc, char *argv[]) {
             }
             std::cout << std::endl;
 
-            auto loss = ComputeLoss(final_b, X, y);
-
-            train_losses[epochI] = loss;
-            scheduler.step(train_losses[epochI]);
+            loss = ComputeLoss(final_b, X, y);
 
             /////////////////////////////////////////////////////////////////
             //Saving and logging information
@@ -598,7 +626,7 @@ int main(int argc, char *argv[]) {
             std::cout << "\tLoss: " << loss << "\t took: "
                       << epochTime / 1000.0 << " s" << std::endl;
             OPENFHE_DEBUG(loss);
-            ofsloss << epochTime << ", " << loss << std::endl;
+            ofsloss << loss << std::endl;
 
             if ((epochI + 1) % WRITE_EVERY == 0 && epochI > 0) {
                 std::cout << "\t Writing weights and test loss to files: " << "(" <<
